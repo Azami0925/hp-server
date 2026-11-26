@@ -11,7 +11,8 @@ ExecStart=/usr/bin/python3 /home/roger1317/monitor/monitor_v3.py
 Restart=always
 RestartSec=10
 Nice=10
-NoNewPrivileges=true
+# Sin NoNewPrivileges: con esa opción el comando ping del monitor falla
+# ("Operation not permitted") y el panel marca SIN INTERNET aunque sí haya.
 
 [Install]
 WantedBy=multi-user.target
