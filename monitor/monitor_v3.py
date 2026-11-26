@@ -63,6 +63,7 @@ state = {
     "download_mbps": None,
     "upload_mbps": None,
     "ping_servidor_speedtest": None,
+    "servidor_speedtest": None,
     "caidas_hoy": 0,
     "total_pings": 0,
     "pings_ok": 0,
@@ -510,10 +511,12 @@ def medir_velocidad():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Midiendo velocidad...")
     out = ejecutar(["speedtest-cli", "--json"], timeout=120)
     try:
+        out = out[out.index("{"):]
         d = json.loads(out)
         state["download_mbps"] = round(d["download"] / 1_000_000, 1)
         state["upload_mbps"] = round(d["upload"] / 1_000_000, 1)
         state["ping_servidor_speedtest"] = round(d["ping"], 1)
+        state["servidor_speedtest"] = f"{d['server']['name']}, {d['server']['country']}"
         state["ultimo_speedtest"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"  Bajada: {state['download_mbps']} Mbps | Subida: {state['upload_mbps']} Mbps")
         return True
@@ -732,7 +735,7 @@ small{color:#94a3b8}
   <div class="card">Ping router<b>{{ s.router_ping_ms }} ms</b></div>
   <div class="card">Ping Google<b>{{ s.google_ping_ms }} ms</b></div>
   <div class="card">Ping Cloudflare<b>{{ s.cloudflare_ping_ms }} ms</b></div>
-  <div class="card">Bajada<b>{{ s.download_mbps or '-' }} Mbps</b><small>Último test: {{ s.ultimo_speedtest or '-' }}</small></div>
+  <div class="card">Bajada<b>{{ s.download_mbps or '-' }} Mbps</b><small>Último test: {{ s.ultimo_speedtest or '-' }}{% if s.servidor_speedtest %} · {{ s.servidor_speedtest }}{% endif %}</small></div>
   <div class="card">Subida<b>{{ s.upload_mbps or '-' }} Mbps</b></div>
   <div class="card">Activos ahora<b>{{ devices.values()|selectattr('activo')|list|length }}</b><small>Último escaneo: {{ s.ultimo_escaneo or '-' }}</small></div>
   <div class="card">Disponibilidad<b>{{ pct }}%</b><small>{{ s.pings_ok }}/{{ s.total_pings }} pings OK · Caídas hoy: {{ s.caidas_hoy }}</small></div>
