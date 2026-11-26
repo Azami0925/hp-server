@@ -499,26 +499,37 @@ lock_velocidad = threading.Lock()
 
 
 def medir_velocidad():
-    """Mide velocidad con speedtest-cli. Devuelve dict o None."""
+    """Mide velocidad con el cliente oficial de Ookla (speedtest).
+    Si no está o falla, usa speedtest-cli como respaldo. Devuelve True/False."""
     if not lock_velocidad.acquire(blocking=False):
         print("  Ya hay un speedtest en curso, se omite este")
         return False
     try:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Midiendo velocidad...")
-        out = ejecutar(["speedtest-cli", "--json"], timeout=120)
         try:
-            out = out[out.index("{"):]
-            d = json.loads(out)
+            # 1) Cliente oficial de Ookla: mide contra el servidor más cercano
+            # (INFINITUM Nuevo Vallarta). Su JSON trae bandwidth en BYTES/s.
+            out = ejecutar(["speedtest", "--format=json", "--accept-license", "--accept-gdpr"], timeout=120)
+            d = json.loads(out[out.index("{"):])
+            state["download_mbps"] = round(d["download"]["bandwidth"] * 8 / 1_000_000, 1)
+            state["upload_mbps"] = round(d["upload"]["bandwidth"] * 8 / 1_000_000, 1)
+            state["ping_servidor_speedtest"] = round(d["ping"]["latency"], 1)
+            state["servidor_speedtest"] = f"{d['server']['name']}, {d['server']['country']}"
+        except Exception:
+            # 2) Respaldo: speedtest-cli (formato viejo, bits/s, solo servidores de Taiwán)
+            print("  Ookla no respondió, probando speedtest-cli...")
+            out = ejecutar(["speedtest-cli", "--json"], timeout=120)
+            d = json.loads(out[out.index("{"):])
             state["download_mbps"] = round(d["download"] / 1_000_000, 1)
             state["upload_mbps"] = round(d["upload"] / 1_000_000, 1)
             state["ping_servidor_speedtest"] = round(d["ping"], 1)
             state["servidor_speedtest"] = f"{d['server']['name']}, {d['server']['country']}"
-            state["ultimo_speedtest"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"  Bajada: {state['download_mbps']} Mbps | Subida: {state['upload_mbps']} Mbps")
-            return True
-        except Exception as e:
-            print(f"  Speedtest falló: {e}")
-            return False
+        state["ultimo_speedtest"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  Bajada: {state['download_mbps']} Mbps | Subida: {state['upload_mbps']} Mbps")
+        return True
+    except Exception as e:
+        print(f"  Speedtest falló: {e}")
+        return False
     finally:
         lock_velocidad.release()
 

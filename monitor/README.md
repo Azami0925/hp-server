@@ -77,6 +77,17 @@ hazlo público o usa `git clone` con un token de acceso.)
 
 ```bash
 sudo apt install -y python3-flask speedtest-cli nmap python3-zeroconf
+
+El test de velocidad usa el cliente oficial de Ookla (mide contra el
+servidor más cercano, en México). `speedtest-cli` queda solo como respaldo.
+Instalar Ookla:
+
+```bash
+curl -L -o /tmp/speedtest.tgz https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz
+tar -xzf /tmp/speedtest.tgz -C /tmp speedtest
+sudo mv /tmp/speedtest /usr/local/bin/speedtest
+speedtest --accept-license --accept-gdpr   # acepta la licencia y prueba
+```
 mkdir -p ~/monitor/templates && cd ~/monitor
 curl -L -o monitor_v3.py "https://raw.githubusercontent.com/Azami0925/hp-server/main/monitor/monitor_v3.py?t=$(date +%s)"
 curl -L -o oui.py "https://raw.githubusercontent.com/Azami0925/hp-server/main/monitor/oui.py?t=$(date +%s)"
