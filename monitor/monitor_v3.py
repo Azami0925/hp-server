@@ -16,6 +16,7 @@ Luego abre desde otro celular o PC en la misma WiFi:
 Para saber la IP:  termux-wifi-connectioninfo  o  ifconfig wlan0
 """
 
+import hmac
 import http.client
 import json
 import os
@@ -30,7 +31,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory
+from flask import Flask, jsonify, redirect, render_template, render_template_string, request, send_from_directory
 
 # ---------- CONFIGURACIÓN - edítala si tu red es diferente ----------
 PUERTO = 5000
@@ -749,25 +750,76 @@ def api_status():
     return jsonify({"state": state, "devices": devices, "outages": outages[-10:]})
 
 
+def _token_ok(valor):
+    # Comparación segura; None o vacío nunca es válido.
+    if not valor or not TOKEN:
+        return False
+    return hmac.compare_digest(valor, TOKEN)
+
+
 @app.before_request
 def pedir_token():
     # Sin token configurado, el panel no pide nada. Con token, hay que abrirlo
-    # una vez con ?token=... y la cookie (30 días, SameSite=Lax) hace el resto.
-    # Los botones /scan, /speedtest y /latencia quedan cubiertos por este mismo
-    # control: sin cookie, un enlace o imagen externa no puede dispararlos.
-    if not TOKEN:
+    # una vez con ?token=... o con el formulario de /login; la cookie
+    # (30 días, SameSite=Lax) hace el resto. Los botones /scan, /speedtest y
+    # /latencia quedan cubiertos por este mismo control: sin cookie, un enlace
+    # o imagen externa no puede dispararlos.
+    if not TOKEN or request.path == "/login":
         return
-    if request.cookies.get("mon_token") == TOKEN or request.args.get("token") == TOKEN:
+    if _token_ok(request.cookies.get("mon_token")) or _token_ok(request.args.get("token")):
         return
-    return "No autorizado", 401
+    return redirect("/login")
 
 
 @app.after_request
 def guardar_cookie(resp):
-    if TOKEN and request.args.get("token") == TOKEN:
+    if TOKEN and _token_ok(request.args.get("token")):
         resp.set_cookie("mon_token", TOKEN, httponly=True, samesite="Lax",
                         max_age=60 * 60 * 24 * 30)
     return resp
+
+
+FORM_LOGIN = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar al monitor</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}
+h1{font-size:22px;margin:0 0 4px}
+p{color:#94a3b8;font-size:14px}
+.err{color:#f87171}
+form{margin:20px 0}
+input{font-size:16px;padding:12px;border-radius:10px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;width:100%;max-width:320px;box-sizing:border-box}
+button{font-size:16px;padding:12px 20px;border-radius:10px;border:0;background:#2563eb;color:#fff;margin-top:10px;cursor:pointer}
+small{color:#94a3b8}
+code{background:#1e293b;padding:2px 6px;border-radius:6px}
+</style></head><body>
+<h1>📡 Monitor de Red v3</h1>
+<p>Este panel está protegido. Escribe el token para entrar.</p>
+{% if error %}<p class="err">Token incorrecto, inténtalo de nuevo.</p>{% endif %}
+<form method="post">
+<input type="password" name="token" placeholder="Token" autocomplete="off" autofocus>
+<br><button type="submit">Entrar</button>
+</form>
+<p><small>El token está en el servidor, en /etc/monitor-red.env — lo ves con <code>sudo cat /etc/monitor-red.env</code>. Al entrar se guarda 30 días en este navegador, así que después entras directo.</small></p>
+</body></html>"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    # Formulario para entrar al panel sin tener que pegar el token en la
+    # dirección: con la cookie guardada, la recarga automática del panel
+    # (cada 30 s) y los botones siguen funcionando.
+    if not TOKEN:
+        return redirect("/")
+    error = False
+    if request.method == "POST":
+        if _token_ok(request.form.get("token")):
+            resp = redirect("/")
+            resp.set_cookie("mon_token", TOKEN, httponly=True, samesite="Lax",
+                            max_age=60 * 60 * 24 * 30)
+            return resp
+        error = True
+    return render_template_string(FORM_LOGIN, error=error)
 
 
 @app.route("/dashboard")

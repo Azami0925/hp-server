@@ -26,8 +26,10 @@ sudo systemctl restart monitor
 ```
 
 Guarda el token en un lugar seguro (lo ves con `sudo cat /etc/monitor-red.env`).
-Para abrir el panel, entra una vez con `http://192.168.1.83:5000/?token=TU_TOKEN`
-y el navegador guarda una cookie por 30 días; después entra normal.
+Para abrir el panel, entra a `http://192.168.1.83:5000` y escribe el token en
+el formulario que aparece; el navegador guarda una cookie por 30 días y
+después entra normal. También sigue funcionando entrar una vez con
+`http://192.168.1.83:5000/?token=TU_TOKEN`.
 
 Sin el archivo `/etc/monitor-red.env` el servicio no arranca (así no queda
 el panel abierto por accidente). Sin token configurado en el código, el panel
