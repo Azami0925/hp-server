@@ -1,0 +1,14 @@
+[Unit]
+Description=Monitor de red v3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=roger1317
+WorkingDirectory=/home/roger1317/monitor
+ExecStart=/usr/bin/python3 /home/roger1317/monitor/monitor_v3.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
