@@ -358,20 +358,36 @@ SERVICIOS_LATENCIA = [
 
 
 def medir_https(host, timeout=5):
-    """Mide ms de una petición HTTPS (HEAD). None si falla."""
-    t0 = time.time()
-    conn = None
-    try:
-        conn = http.client.HTTPSConnection(host, timeout=timeout)
-        conn.request("HEAD", "/")
-        r = conn.getresponse()
-        r.read()
-        return round((time.time() - t0) * 1000)
-    except Exception:
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
+    """Mide ms de una petición HTTPS. HEAD primero; si el servidor no lo
+    acepta (error 4xx/5xx o conexión cerrada), reintenta con GET leyendo
+    solo 1 KB. None si falla."""
+    for metodo in ("HEAD", "GET"):
+        t0 = time.time()
+        conn = None
+        try:
+            conn = http.client.HTTPSConnection(host, timeout=timeout)
+            conn.request(metodo, "/")
+            r = conn.getresponse()
+            if r.status >= 400 and metodo == "HEAD":
+                continue
+            r.read() if metodo == "HEAD" else r.read(1024)
+            return round((time.time() - t0) * 1000)
+        except Exception:
+            continue
+        finally:
+            if conn is not None:
+                conn.close()
+    return None
+
+
+def _clase_latencia(tipo, ms):
+    """Color de la latencia: ICMP se juzga como ping; HTTPS como HTTPS
+    (el handshake TLS ya suma 150-300 ms aunque todo esté bien)."""
+    if ms is None:
+        return "bad"
+    if tipo == "ICMP":
+        return "ok" if ms < 50 else ("warn" if ms < 150 else "bad")
+    return "ok" if ms < 250 else ("warn" if ms < 500 else "bad")
 
 
 def medir_latencia_servicios():
@@ -381,7 +397,8 @@ def medir_latencia_servicios():
         ms = ping(destino) if tipo == "ICMP" else medir_https(destino)
         if ms is not None:
             ms = round(ms)
-        out.append({"nombre": nombre, "tipo": tipo, "destino": destino, "ms": ms})
+        out.append({"nombre": nombre, "tipo": tipo, "destino": destino, "ms": ms,
+                    "clase": _clase_latencia(tipo, ms)})
     state["latencia_servicios"] = out
     state["ultima_latencia"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return out
@@ -758,7 +775,7 @@ small{color:#94a3b8}
 <table><tr><th>Servicio</th><th>Tipo</th><th>Destino</th><th>Latencia</th></tr>
 {% for l in s.latencia_servicios %}
 <tr><td>{{ l.nombre }}</td><td>{{ l.tipo }}</td><td>{{ l.destino }}</td>
-<td class="{{ 'ok' if l.ms is not none and l.ms < 50 else ('warn' if l.ms is not none and l.ms < 150 else 'bad') }}">{{ (l.ms|string + ' ms') if l.ms is not none else 'sin respuesta' }}</td></tr>
+<td class="{{ l.clase }}">{{ (l.ms|string + ' ms') if l.ms is not none else 'sin respuesta' }}</td></tr>
 {% endfor %}</table>
 
 <h2>Dispositivos conectados</h2>
