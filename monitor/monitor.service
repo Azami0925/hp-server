@@ -6,9 +6,12 @@ Wants=network-online.target
 [Service]
 User=roger1317
 WorkingDirectory=/home/roger1317/monitor
+EnvironmentFile=/etc/monitor-red.env
 ExecStart=/usr/bin/python3 /home/roger1317/monitor/monitor_v3.py
 Restart=always
 RestartSec=10
+Nice=10
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

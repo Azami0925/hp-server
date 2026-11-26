@@ -1,0 +1,6 @@
+# Datos del monitor (MACs, nombres de dispositivos, puertos): nunca subir al repo.
+data_v3/
+# Secretos locales (tokens, archivos .env): nunca subir al repo.
+*.env
+# Caché de Python.
+__pycache__/

@@ -1,0 +1,75 @@
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>Monitor de Red v3</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}
+h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:24px 0 8px}
+.sub{color:#94a3b8;font-size:13px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.card{background:#1e293b;border-radius:12px;padding:14px}
+.card b{font-size:22px;display:block;margin-top:4px}
+.ok{color:#4ade80}.bad{color:#f87171}.warn{color:#facc15}
+table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}
+th,td{padding:10px;text-align:left;font-size:13px;border-bottom:1px solid #334155}
+th{color:#94a3b8}.badge{background:#334155;padding:3px 8px;border-radius:20px;font-size:11px}
+.btn{display:inline-block;background:#2563eb;color:#fff;padding:10px 16px;border-radius:10px;text-decoration:none;margin:4px 4px 16px 0}
+.btn2{background:#334155}
+small{color:#94a3b8}
+</style></head><body>
+<h1>📡 Monitor de Red v3</h1>
+<div class="sub">Router {{ s.router_ip }} · Red {{ s.subnet }} · Desde {{ s.inicio }} · Último ping {{ s.ultimo_ping or '-' }}</div>
+
+<div class="grid">
+  <div class="card">Internet<b class="{{ 'ok' if s.internet_ok else 'bad' }}">{{ '✅ ONLINE' if s.internet_ok else '❌ SIN INTERNET' if s.internet_ok==False else '...' }}</b></div>
+  <div class="card">Ping router<b>{{ s.router_ping_ms }} ms</b></div>
+  <div class="card">Ping Google<b>{{ s.google_ping_ms }} ms</b></div>
+  <div class="card">Ping Cloudflare<b>{{ s.cloudflare_ping_ms }} ms</b></div>
+  <div class="card">Bajada<b>{{ s.download_mbps or '-' }} Mbps</b><small>Último test: {{ s.ultimo_speedtest or '-' }}{% if s.servidor_speedtest %} · {{ s.servidor_speedtest }}{% endif %}</small></div>
+  <div class="card">Subida<b>{{ s.upload_mbps or '-' }} Mbps</b></div>
+  <div class="card">Activos ahora<b>{{ devices.values()|selectattr('activo')|list|length }}</b><small>Último escaneo: {{ s.ultimo_escaneo or '-' }}</small></div>
+  <div class="card">Disponibilidad<b>{{ pct }}%</b><small>{{ s.pings_ok }}/{{ s.total_pings }} pings OK · Caídas hoy: {{ s.caidas_hoy }}</small></div>
+</div>
+
+<a class="btn" href="/scan">🔍 Escanear ahora</a>
+<a class="btn" href="/speedtest">⚡ Medir velocidad ahora</a>
+<a class="btn" href="/latencia">📶 Medir latencia ahora</a>
+<a class="btn btn2" href="/">↻ Actualizar</a>
+
+<h2>🖥️ Servidor</h2>
+<div class="grid">
+  <div class="card">CPU<b class="{{ 'ok' if s.cpu_pct is not none and s.cpu_pct < 70 else ('warn' if s.cpu_pct is not none and s.cpu_pct < 90 else 'bad') }}">{{ (s.cpu_pct|string + ' %') if s.cpu_pct is not none else '-' }}</b><small>Última medición: {{ s.ultimo_sistema or '-' }}</small></div>
+  <div class="card">Temperatura<b class="{{ 'ok' if s.cpu_temp_c is not none and s.cpu_temp_c < 70 else ('warn' if s.cpu_temp_c is not none and s.cpu_temp_c < 85 else 'bad') }}">{{ (s.cpu_temp_c|string + ' °C') if s.cpu_temp_c is not none else 'sin sensor' }}</b></div>
+  <div class="card">RAM<b>{{ (s.ram_usada_gb|string + ' / ' + s.ram_total_gb|string + ' GB') if s.ram_usada_gb is not none else '-' }}</b><small>{{ (s.ram_pct|string + ' % en uso') if s.ram_pct is not none else '' }}</small></div>
+</div>
+
+<h2>Latencia a servicios</h2>
+<p><small>Última medición: {{ s.ultima_latencia or '-' }} · Se mide sola cada 2 minutos.</small></p>
+<table><tr><th>Servicio</th><th>Tipo</th><th>Destino</th><th>Latencia</th></tr>
+{% for l in s.latencia_servicios %}
+<tr><td>{{ l.nombre }}</td><td>{{ l.tipo }}</td><td>{{ l.destino }}</td>
+<td class="{{ l.clase }}">{{ (l.ms|string + ' ms') if l.ms is not none else 'sin respuesta' }}</td></tr>
+{% endfor %}</table>
+
+<h2>Dispositivos conectados</h2>
+<table><tr><th>IP</th><th>Nombre</th><th>Fabricante</th><th>MAC</th><th>Puertos abiertos</th><th>Primera vez</th><th>Última vez</th><th>Veces</th></tr>
+{% for d in devices_ordenados %}
+<tr><td>{{ d.ip }} {% if d.ip==s.router_ip %}<span class="badge">Router</span>{% endif %} {% if d.nuevo %}<span class="badge">🆕 Nuevo</span>{% endif %}</td>
+<td>{{ d.nombre or '-' }}</td><td>{{ d.fabricante or '?' }}</td><td>{{ d.mac }}</td>
+<td>{% if d.puertos %}{% for p in d.puertos %}<span class="badge">{{ p }} {{ servicios.get(p, '') }}</span> {% endfor %}{% else %}-{% endif %}</td>
+<td>{{ d.first_seen }}</td><td>{{ d.last_seen }}</td><td>{{ d.veces_visto }}</td></tr>
+{% endfor %}</table>
+<p><small>Si un dispositivo no aparece, puede estar apagado o con WiFi apagado. El escaneo corre solo cada 5 minutos.</small></p>
+
+<h2>Últimas caídas</h2>
+{% if outages %}
+<table><tr><th>Inicio</th><th>Fin</th><th>Duración</th></tr>
+{% for o in outages|reverse %}
+<tr><td>{{ o.inicio }}</td><td>{{ o.fin }}</td><td>{{ o.duracion_seg }} s</td></tr>
+{% endfor %}</table>
+{% else %}<p><small>Sin caídas registradas desde que arrancó el monitor.</small></p>{% endif %}
+
+<h2>Historial reciente de ping (Google)</h2>
+<p>{% for h in history|reverse %}<span style="color:{{ '#4ade80' if h.ok else '#f87171' }}">●</span> {{ h.hora }}: {{ h.google or 'sin respuesta' }} ms &nbsp;{% endfor %}</p>
+<p><small>El panel se actualiza solo cada 30 segundos. Datos guardados en data_v3/.</small></p>
+</body></html>

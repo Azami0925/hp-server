@@ -22,13 +22,15 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory
 
 # ---------- CONFIGURACIÓN - edítala si tu red es diferente ----------
 PUERTO = 5000
@@ -36,11 +38,22 @@ INTERVALO_PING = 10          # segundos entre pings
 INTERVALO_ESCANEO = 300      # segundos entre escaneos de dispositivos (5 min)
 INTERVALO_VELOCIDAD = 1800   # segundos entre tests de velocidad (30 min)
 INTERVALO_LATENCIA = 120     # segundos entre mediciones de latencia a servicios
-ROUTER_IP = "192.168.1.254"  # Telmex Infinitum: gateway es .254, no .1. Confirmado 2026-11-09.
+# IP del router/gateway. Si cambias de router o de red, edita esta constante
+# (y SUBNET): el monitor no la vuelve a detectar solo. Telmex Infinitum:
+# gateway es .254, no .1. Confirmado 2026-11-09. Si ROUTER_IP y SUBNET se
+# dejan vacías, autodetectar_red() intenta detectarlas al arrancar.
+ROUTER_IP = "192.168.1.254"
 SUBNET = "192.168.1.0/24"
+# Token para abrir el panel (se lee del entorno). Se guarda en
+# /etc/monitor-red.env (permisos 600) y el servicio lo carga con
+# EnvironmentFile. Sin token configurado, el panel no pide nada.
+TOKEN = os.environ.get("MONITOR_TOKEN", "")
 # -------------------------------------------------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)  # para importar oui.py junto al script
+from oui import OUI_FABRICANTES
+
 DATA_DIR = os.path.join(BASE_DIR, "data_v3")
 os.makedirs(DATA_DIR, exist_ok=True)
 DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
@@ -166,50 +179,8 @@ PUERTOS_COMUNES = {
     8443: "HTTPS-alt", 1900: "UPnP", 5353: "mDNS",
 }
 
-# Primeros 3 bytes de la MAC -> fabricante (OUI). Solo marcas comunes en casa.
-OUI_FABRICANTES = {
-    "50:C7:BF": "TP-Link", "60:E3:27": "TP-Link", "98:DA:C4": "TP-Link",
-    "B0:4E:26": "TP-Link", "14:CC:20": "TP-Link", "84:D8:1B": "TP-Link",
-    "F4:F2:6D": "TP-Link", "C0:25:A5": "TP-Link", "00:27:19": "TP-Link",
-    "90:F6:52": "TP-Link", "E8:DE:27": "TP-Link", "1C:3B:F3": "TP-Link",
-    "30:B5:C2": "TP-Link", "6C:19:8F": "TP-Link", "A8:2B:B5": "TP-Link",
-    "50:FA:84": "TP-Link",
-    "F0:27:2D": "Amazon", "44:65:0D": "Amazon", "0C:47:C9": "Amazon",
-    "68:37:E9": "Amazon", "34:D2:70": "Amazon", "40:B4:CD": "Amazon",
-    "74:C2:46": "Amazon", "88:71:E5": "Amazon", "18:74:2E": "Amazon",
-    "A0:02:DC": "Amazon", "00:FC:8B": "Amazon", "50:DC:E7": "Amazon",
-    "F4:F5:D8": "Google", "94:EB:2C": "Google", "54:60:09": "Google",
-    "18:B4:30": "Google", "00:1A:11": "Google", "3C:5A:B4": "Google",
-    "20:DF:B9": "Google",
-    "24:6F:28": "Espressif", "24:0A:C4": "Espressif", "30:AE:A4": "Espressif",
-    "3C:71:BF": "Espressif", "7C:DF:A1": "Espressif", "84:CC:A8": "Espressif",
-    "98:F4:AB": "Espressif", "A0:76:4E": "Espressif", "BC:DD:C2": "Espressif",
-    "C4:4F:33": "Espressif", "DC:4F:22": "Espressif", "E8:68:E7": "Espressif",
-    "84:0D:8E": "Espressif", "40:F5:20": "Espressif", "08:3A:F2": "Espressif",
-    "10:52:1C": "Espressif",
-    "64:CC:2E": "Xiaomi", "8C:BE:BE": "Xiaomi", "F0:B4:29": "Xiaomi",
-    "34:CE:00": "Xiaomi", "28:6C:07": "Xiaomi", "78:11:DC": "Xiaomi",
-    "04:CF:8C": "Xiaomi", "10:2A:B3": "Xiaomi", "7C:2F:80": "Xiaomi",
-    "0C:1D:AF": "Xiaomi", "14:F6:5A": "Xiaomi",
-    "78:52:1A": "Samsung", "5C:51:88": "Samsung", "8C:77:12": "Samsung",
-    "84:38:35": "Samsung", "C0:BD:D1": "Samsung", "34:23:87": "Samsung",
-    "88:30:8A": "Samsung", "00:12:FB": "Samsung", "D0:22:BE": "Samsung",
-    "9C:3A:AF": "Samsung", "60:A1:0A": "Samsung", "50:77:23": "Samsung",
-    "88:63:DF": "Apple", "40:30:04": "Apple", "F0:18:98": "Apple",
-    "8C:85:90": "Apple", "04:0C:CE": "Apple", "7C:6D:F8": "Apple",
-    "6C:72:E7": "Apple", "04:15:52": "Apple", "28:CF:DA": "Apple",
-    "9C:35:EB": "Apple", "3C:06:30": "Apple", "5C:96:9D": "Apple",
-    "8C:7B:9D": "Apple",
-    "00:9A:CD": "Huawei", "04:02:1F": "Huawei", "48:46:C1": "Huawei",
-    "60:DE:44": "Huawei", "0C:96:BF": "Huawei", "24:2E:90": "Huawei",
-    "58:22:33": "Huawei", "80:B6:86": "Huawei",
-    "9C:30:5B": "LG", "98:0D:51": "LG", "74:A7:22": "LG", "20:47:ED": "LG",
-    "00:1E:75": "LG", "3C:BD:3E": "LG", "78:5D:C8": "LG",
-    "00:E0:4C": "Realtek",
-    "D8:31:34": "Roku", "CC:6D:A0": "Roku", "B8:A1:75": "Roku",
-    "00:1B:21": "Intel", "00:1F:3B": "Intel", "3C:FD:FE": "Intel",
-    "4C:79:BA": "Intel", "7C:7A:91": "Intel", "9C:FC:01": "Intel",
-}
+# OUI_FABRICANTES vive en oui.py (se separó de este archivo).
+
 
 
 def fabricante_por_mac(mac):
@@ -226,14 +197,12 @@ def escanear_puertos(ip, timeout=0.4):
 
     def _probar(p):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            if s.connect_ex((ip, p)) == 0:
-                abiertos.append(p)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                if s.connect_ex((ip, p)) == 0:
+                    abiertos.append(p)
         except Exception:
             pass
-        finally:
-            s.close()
 
     try:
         with ThreadPoolExecutor(max_workers=len(PUERTOS_COMUNES)) as ex:
@@ -243,9 +212,15 @@ def escanear_puertos(ip, timeout=0.4):
     return sorted(abiertos)
 
 
-def _nombre_desde_descripcion(url, timeout=1.5):
-    """Lee el XML de descripción UPnP y saca friendlyName / fabricante + modelo."""
+def _nombre_desde_descripcion(url, ip_esperada="", timeout=1.5):
+    """Lee el XML de descripción UPnP y saca friendlyName / fabricante + modelo.
+    Solo acepta URLs http cuyo host sea la IP del dispositivo que anunció el SSDP."""
     try:
+        partes = urllib.parse.urlparse(url)
+        if partes.scheme != "http":
+            return ""
+        if ip_esperada and (partes.hostname or "") != ip_esperada:
+            return ""
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             xml = r.read(8192).decode("utf-8", "ignore")
@@ -273,28 +248,27 @@ def descubrir_ssdp(timeout=2.0):
         "ST: upnp:rootdevice",
         "", ""])).encode()
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(timeout)
-        s.sendto(msg, ("239.255.255.250", 1900))
-        fin = time.time() + timeout
-        while time.time() < fin:
-            try:
-                data, (ip, _) = s.recvfrom(4096)
-            except socket.timeout:
-                break
-            except Exception:
-                break
-            txt = data.decode("utf-8", "ignore")
-            loc = re.search(r"LOCATION:\s*(http://[\d\.]+:\d+(/\S*)?)", txt, re.I)
-            srv = re.search(r"SERVER:\s*(.+)", txt, re.I)
-            nombre = ""
-            if loc:
-                nombre = _nombre_desde_descripcion(loc.group(1))
-            if not nombre and srv:
-                nombre = srv.group(1).strip().split(",")[0]
-            if ip not in res and nombre:
-                res[ip] = nombre
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(msg, ("239.255.255.250", 1900))
+            fin = time.time() + timeout
+            while time.time() < fin:
+                try:
+                    data, (ip, _) = s.recvfrom(4096)
+                except socket.timeout:
+                    break
+                except Exception:
+                    break
+                txt = data.decode("utf-8", "ignore")
+                loc = re.search(r"LOCATION:\s*(http://[\d\.]+:\d+(/\S*)?)", txt, re.I)
+                srv = re.search(r"SERVER:\s*(.+)", txt, re.I)
+                nombre = ""
+                if loc:
+                    nombre = _nombre_desde_descripcion(loc.group(1), ip)
+                if not nombre and srv:
+                    nombre = srv.group(1).strip().split(",")[0]
+                if ip not in res and nombre:
+                    res[ip] = nombre
     except Exception as e:
         print(f"  SSDP falló: {e}")
     return res
@@ -393,18 +367,27 @@ def _clase_latencia(tipo, ms):
     return "ok" if ms < 250 else ("warn" if ms < 500 else "bad")
 
 
+lock_latencia = threading.Lock()
+
+
 def medir_latencia_servicios():
     """Mide latencia a los 11 servicios de la lista. Guarda en state."""
-    out = []
-    for nombre, tipo, destino in SERVICIOS_LATENCIA:
-        ms = ping(destino) if tipo == "ICMP" else medir_https(destino)
-        if ms is not None:
-            ms = round(ms)
-        out.append({"nombre": nombre, "tipo": tipo, "destino": destino, "ms": ms,
-                    "clase": _clase_latencia(tipo, ms)})
-    state["latencia_servicios"] = out
-    state["ultima_latencia"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return out
+    if not lock_latencia.acquire(blocking=False):
+        print("  Ya hay una medición de latencia en curso, se omite esta")
+        return state["latencia_servicios"]
+    try:
+        out = []
+        for nombre, tipo, destino in SERVICIOS_LATENCIA:
+            ms = ping(destino) if tipo == "ICMP" else medir_https(destino)
+            if ms is not None:
+                ms = round(ms)
+            out.append({"nombre": nombre, "tipo": tipo, "destino": destino, "ms": ms,
+                        "clase": _clase_latencia(tipo, ms)})
+        state["latencia_servicios"] = out
+        state["ultima_latencia"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return out
+    finally:
+        lock_latencia.release()
 
 
 # ---------- DISPOSITIVOS ----------
@@ -434,10 +417,9 @@ def _registrar(ip, mac="", vistos=None):
 
 
 def _escanear_dispositivos_interno():
-    """Escanea la red sin root: nmap -sn (sin -PR, que pide root) + barrido ping + ip neigh.
+    """Escanea la red sin root: nmap -sn (sin -PR, que pide root) + ip neigh.
     v3 suma: nombres por SSDP/mDNS, fabricante por MAC y puertos abiertos por equipo."""
     subnet = state["subnet"]
-    base = subnet.split("/")[0].rsplit(".", 1)[0]  # ej: 192.168.1
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Escaneando {subnet} ...")
     vistos = set()
 
@@ -455,28 +437,14 @@ def _escanear_dispositivos_interno():
             devices[ip_actual]["mac"] = m_mac.group(1).lower()
             devices[ip_actual]["fabricante"] = fabricante_por_mac(m_mac.group(1))
 
-    # 2) Barrido ping en paralelo (.1 a .254). Las cámaras que bloquean ping
-    # igual dejan su MAC en la tabla ARP al intentar resolverlas.
-    def _ping_una(i):
-        ip = f"{base}.{i}"
-        return ip if ping(ip) is not None else None
-
-    try:
-        with ThreadPoolExecutor(max_workers=30) as ex:
-            for ip in ex.map(_ping_una, range(1, 255)):
-                if ip:
-                    _registrar(ip, vistos=vistos)
-    except Exception as e:
-        print(f"  Barrido ping falló: {e}")
-
-    # 3) ip neigh para completar MACs
+    # 2) ip neigh para completar MACs
     out = ejecutar(["ip", "neigh"])
     for line in out.splitlines():
         m = re.match(r"(\d+\.\d+\.\d+\.\d+).*lladdr\s+([0-9a-f:]{17})", line, re.I)
         if m:
             _registrar(m.group(1), m.group(2), vistos=vistos)
 
-    # 4) v3: nombres por UPnP/SSDP y mDNS
+    # 3) v3: nombres por UPnP/SSDP y mDNS
     try:
         nombres = descubrir_ssdp()
         nombres.update(descubrir_mdns())
@@ -487,7 +455,7 @@ def _escanear_dispositivos_interno():
     except Exception as e:
         print(f"  Descubrir nombres falló: {e}")
 
-    # 5) v3: fabricante por MAC + puertos abiertos (solo equipos vistos en este escaneo)
+    # 4) v3: fabricante por MAC + puertos abiertos (solo equipos vistos en este escaneo)
     for ip in vistos:
         if ip in devices:
             devices[ip]["fabricante"] = fabricante_por_mac(devices[ip].get("mac", "?"))
@@ -526,23 +494,32 @@ def escanear_dispositivos():
         lock_escaneo.release()
 
 
+lock_velocidad = threading.Lock()
+
+
 def medir_velocidad():
     """Mide velocidad con speedtest-cli. Devuelve dict o None."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Midiendo velocidad...")
-    out = ejecutar(["speedtest-cli", "--json"], timeout=120)
-    try:
-        out = out[out.index("{"):]
-        d = json.loads(out)
-        state["download_mbps"] = round(d["download"] / 1_000_000, 1)
-        state["upload_mbps"] = round(d["upload"] / 1_000_000, 1)
-        state["ping_servidor_speedtest"] = round(d["ping"], 1)
-        state["servidor_speedtest"] = f"{d['server']['name']}, {d['server']['country']}"
-        state["ultimo_speedtest"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"  Bajada: {state['download_mbps']} Mbps | Subida: {state['upload_mbps']} Mbps")
-        return True
-    except Exception as e:
-        print(f"  Speedtest falló: {e}")
+    if not lock_velocidad.acquire(blocking=False):
+        print("  Ya hay un speedtest en curso, se omite este")
         return False
+    try:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Midiendo velocidad...")
+        out = ejecutar(["speedtest-cli", "--json"], timeout=120)
+        try:
+            out = out[out.index("{"):]
+            d = json.loads(out)
+            state["download_mbps"] = round(d["download"] / 1_000_000, 1)
+            state["upload_mbps"] = round(d["upload"] / 1_000_000, 1)
+            state["ping_servidor_speedtest"] = round(d["ping"], 1)
+            state["servidor_speedtest"] = f"{d['server']['name']}, {d['server']['country']}"
+            state["ultimo_speedtest"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  Bajada: {state['download_mbps']} Mbps | Subida: {state['upload_mbps']} Mbps")
+            return True
+        except Exception as e:
+            print(f"  Speedtest falló: {e}")
+            return False
+    finally:
+        lock_velocidad.release()
 
 
 # ---------- HILOS EN SEGUNDO PLANO ----------
@@ -587,9 +564,12 @@ def hilo_ping():
             if len(outages) > 50:
                 outages.pop(0)
             guardar_json(OUTAGES_FILE, outages)
-            state["caidas_hoy"] = len([o for o in outages if o["inicio"].startswith(datetime.now().strftime("%Y-%m-%d"))])
             print(f"[{ahora}] ✅ Internet de vuelta tras {dur}s")
             caida_actual = None
+
+        # Recalcular en cada ciclo (no solo al volver internet): el contador
+        # debe reiniciarse al cambiar de día aunque no haya caídas nuevas.
+        state["caidas_hoy"] = len([o for o in outages if o["inicio"].startswith(datetime.now().strftime("%Y-%m-%d"))])
 
         time.sleep(INTERVALO_PING)
 
@@ -727,83 +707,7 @@ def hilo_sistema():
 
 # ---------- PANEL WEB ----------
 
-HTML = """
-<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
-<title>Monitor de Red v3</title>
-<style>
-body{font-family:system-ui,Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}
-h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:24px 0 8px}
-.sub{color:#94a3b8;font-size:13px;margin-bottom:16px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
-.card{background:#1e293b;border-radius:12px;padding:14px}
-.card b{font-size:22px;display:block;margin-top:4px}
-.ok{color:#4ade80}.bad{color:#f87171}.warn{color:#facc15}
-table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}
-th,td{padding:10px;text-align:left;font-size:13px;border-bottom:1px solid #334155}
-th{color:#94a3b8}.badge{background:#334155;padding:3px 8px;border-radius:20px;font-size:11px}
-.btn{display:inline-block;background:#2563eb;color:#fff;padding:10px 16px;border-radius:10px;text-decoration:none;margin:4px 4px 16px 0}
-.btn2{background:#334155}
-small{color:#94a3b8}
-</style></head><body>
-<h1>📡 Monitor de Red v3</h1>
-<div class="sub">Router {{ s.router_ip }} · Red {{ s.subnet }} · Desde {{ s.inicio }} · Último ping {{ s.ultimo_ping or '-' }}</div>
-
-<div class="grid">
-  <div class="card">Internet<b class="{{ 'ok' if s.internet_ok else 'bad' }}">{{ '✅ ONLINE' if s.internet_ok else '❌ SIN INTERNET' if s.internet_ok==False else '...' }}</b></div>
-  <div class="card">Ping router<b>{{ s.router_ping_ms }} ms</b></div>
-  <div class="card">Ping Google<b>{{ s.google_ping_ms }} ms</b></div>
-  <div class="card">Ping Cloudflare<b>{{ s.cloudflare_ping_ms }} ms</b></div>
-  <div class="card">Bajada<b>{{ s.download_mbps or '-' }} Mbps</b><small>Último test: {{ s.ultimo_speedtest or '-' }}{% if s.servidor_speedtest %} · {{ s.servidor_speedtest }}{% endif %}</small></div>
-  <div class="card">Subida<b>{{ s.upload_mbps or '-' }} Mbps</b></div>
-  <div class="card">Activos ahora<b>{{ devices.values()|selectattr('activo')|list|length }}</b><small>Último escaneo: {{ s.ultimo_escaneo or '-' }}</small></div>
-  <div class="card">Disponibilidad<b>{{ pct }}%</b><small>{{ s.pings_ok }}/{{ s.total_pings }} pings OK · Caídas hoy: {{ s.caidas_hoy }}</small></div>
-</div>
-
-<a class="btn" href="/scan">🔍 Escanear ahora</a>
-<a class="btn" href="/speedtest">⚡ Medir velocidad ahora</a>
-<a class="btn" href="/latencia">📶 Medir latencia ahora</a>
-<a class="btn btn2" href="/">↻ Actualizar</a>
-
-<h2>🖥️ Servidor</h2>
-<div class="grid">
-  <div class="card">CPU<b class="{{ 'ok' if s.cpu_pct is not none and s.cpu_pct < 70 else ('warn' if s.cpu_pct is not none and s.cpu_pct < 90 else 'bad') }}">{{ (s.cpu_pct|string + ' %') if s.cpu_pct is not none else '-' }}</b><small>Última medición: {{ s.ultimo_sistema or '-' }}</small></div>
-  <div class="card">Temperatura<b class="{{ 'ok' if s.cpu_temp_c is not none and s.cpu_temp_c < 70 else ('warn' if s.cpu_temp_c is not none and s.cpu_temp_c < 85 else 'bad') }}">{{ (s.cpu_temp_c|string + ' °C') if s.cpu_temp_c is not none else 'sin sensor' }}</b></div>
-  <div class="card">RAM<b>{{ (s.ram_usada_gb|string + ' / ' + s.ram_total_gb|string + ' GB') if s.ram_usada_gb is not none else '-' }}</b><small>{{ (s.ram_pct|string + ' % en uso') if s.ram_pct is not none else '' }}</small></div>
-</div>
-
-<h2>Latencia a servicios</h2>
-<p><small>Última medición: {{ s.ultima_latencia or '-' }} · Se mide sola cada 2 minutos.</small></p>
-<table><tr><th>Servicio</th><th>Tipo</th><th>Destino</th><th>Latencia</th></tr>
-{% for l in s.latencia_servicios %}
-<tr><td>{{ l.nombre }}</td><td>{{ l.tipo }}</td><td>{{ l.destino }}</td>
-<td class="{{ l.clase }}">{{ (l.ms|string + ' ms') if l.ms is not none else 'sin respuesta' }}</td></tr>
-{% endfor %}</table>
-
-<h2>Dispositivos conectados</h2>
-<table><tr><th>IP</th><th>Nombre</th><th>Fabricante</th><th>MAC</th><th>Puertos abiertos</th><th>Primera vez</th><th>Última vez</th><th>Veces</th></tr>
-{% for d in devices_ordenados %}
-<tr><td>{{ d.ip }} {% if d.ip==s.router_ip %}<span class="badge">Router</span>{% endif %} {% if d.nuevo %}<span class="badge">🆕 Nuevo</span>{% endif %}</td>
-<td>{{ d.nombre or '-' }}</td><td>{{ d.fabricante or '?' }}</td><td>{{ d.mac }}</td>
-<td>{% if d.puertos %}{% for p in d.puertos %}<span class="badge">{{ p }} {{ servicios.get(p, '') }}</span> {% endfor %}{% else %}-{% endif %}</td>
-<td>{{ d.first_seen }}</td><td>{{ d.last_seen }}</td><td>{{ d.veces_visto }}</td></tr>
-{% endfor %}</table>
-<p><small>Si un dispositivo no aparece, puede estar apagado o con WiFi apagado. El escaneo corre solo cada 5 minutos.</small></p>
-
-<h2>Últimas caídas</h2>
-{% if outages %}
-<table><tr><th>Inicio</th><th>Fin</th><th>Duración</th></tr>
-{% for o in outages|reverse %}
-<tr><td>{{ o.inicio }}</td><td>{{ o.fin }}</td><td>{{ o.duracion_seg }} s</td></tr>
-{% endfor %}</table>
-{% else %}<p><small>Sin caídas registradas desde que arrancó el monitor.</small></p>{% endif %}
-
-<h2>Historial reciente de ping (Google)</h2>
-<p>{% for h in history|reverse %}<span style="color:{{ '#4ade80' if h.ok else '#f87171' }}">●</span> {{ h.hora }}: {{ h.google or 'sin respuesta' }} ms &nbsp;{% endfor %}</p>
-<p><small>El panel se actualiza solo cada 30 segundos. Datos guardados en data_v3/.</small></p>
-</body></html>
-"""
+# Plantilla del panel: templates/index.html (se separó de este archivo).
 
 
 def clave_ip(d):
@@ -817,9 +721,9 @@ def clave_ip(d):
 @app.route("/")
 def index():
     pct = round(state["pings_ok"] * 100 / state["total_pings"], 1) if state["total_pings"] else 100.0
-    return render_template_string(HTML, s=state, devices=devices, history=history,
-                                  outages=outages, pct=pct, servicios=PUERTOS_COMUNES,
-                                  devices_ordenados=sorted(devices.values(), key=clave_ip))
+    return render_template("index.html", s=state, devices=devices, history=history,
+                           outages=outages, pct=pct, servicios=PUERTOS_COMUNES,
+                           devices_ordenados=sorted(devices.values(), key=clave_ip))
 
 
 @app.route("/scan")
@@ -845,12 +749,24 @@ def api_status():
     return jsonify({"state": state, "devices": devices, "outages": outages[-10:]})
 
 
+@app.before_request
+def pedir_token():
+    # Sin token configurado, el panel no pide nada. Con token, hay que abrirlo
+    # una vez con ?token=... y la cookie (30 días, SameSite=Lax) hace el resto.
+    # Los botones /scan, /speedtest y /latencia quedan cubiertos por este mismo
+    # control: sin cookie, un enlace o imagen externa no puede dispararlos.
+    if not TOKEN:
+        return
+    if request.cookies.get("mon_token") == TOKEN or request.args.get("token") == TOKEN:
+        return
+    return "No autorizado", 401
+
+
 @app.after_request
-def permitir_dashboard(resp):
-    # El dashboard vive en el mismo monitor, pero esto también lo deja
-    # consultable desde otra página local si hace falta.
-    if request.path.startswith("/api/"):
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+def guardar_cookie(resp):
+    if TOKEN and request.args.get("token") == TOKEN:
+        resp.set_cookie("mon_token", TOKEN, httponly=True, samesite="Lax",
+                        max_age=60 * 60 * 24 * 30)
     return resp
 
 
