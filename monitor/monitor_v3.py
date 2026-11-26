@@ -357,7 +357,7 @@ SERVICIOS_LATENCIA = [
 ]
 
 
-def medir_https(host, timeout=5):
+def medir_https(host, timeout=10):
     """Mide ms de una petición HTTPS. HEAD primero; si el servidor no lo
     acepta (error 4xx/5xx o conexión cerrada), reintenta con GET leyendo
     solo 1 KB. None si falla."""
@@ -366,11 +366,14 @@ def medir_https(host, timeout=5):
         conn = None
         try:
             conn = http.client.HTTPSConnection(host, timeout=timeout)
-            conn.request(metodo, "/")
+            conn.request(metodo, "/", headers={"User-Agent": "Monitor-Red-v3"})
             r = conn.getresponse()
             if r.status >= 400 and metodo == "HEAD":
                 continue
-            r.read() if metodo == "HEAD" else r.read(1024)
+            try:
+                r.read() if metodo == "HEAD" else r.read(1024)
+            except Exception:
+                pass
             return round((time.time() - t0) * 1000)
         except Exception:
             continue
