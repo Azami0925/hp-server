@@ -30,7 +30,9 @@ Pruebas sin cámaras:
     python3 camara-telegram.py --probar-telegram
     python3 camara-telegram.py --una-vez
 
-Hecho para Roger. v1 — 25 nov 2026.
+Hecho para Roger. v1.1 — 27 nov 2026 (correcciones de Claude: bucle con una
+sola pausa al final, sin token en el log, placeholder RTSP tratado como
+vacío, sin sys.exit dentro del hilo de la cámara).
 """
 
 import json
@@ -116,6 +118,15 @@ def cargar_config(ruta=CONFIG_PATH):
     # Variables de entorno mandan sobre el archivo
     cfg["telegram"]["token"] = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg["telegram"]["token"]
     cfg["telegram"]["chat_id"] = os.environ.get("TELEGRAM_CHAT_ID") or cfg["telegram"]["chat_id"]
+
+    # Si el usuario/contraseña RTSP quedaron como placeholder ("TU_..."),
+    # se tratan como vacíos para que manden las variables de entorno
+    # RTSP_USUARIO / RTSP_CONTRASENA (si no, el texto "TU_..." se usaría
+    # como usuario real y nunca se leerían las variables).
+    for cam in cfg.get("camaras", []):
+        for clave in ("usuario", "contrasena"):
+            if str(cam.get(clave, "")).startswith("TU_"):
+                cam[clave] = ""
 
     return cfg
 
@@ -310,7 +321,9 @@ def enviar_foto_telegram(token, chat_id, ruta_foto, caption, timeout=30):
                 timeout=timeout,
             )
     except requests.RequestException as e:
-        log(f"  Telegram: no se pudo enviar ({e})")
+        # Solo el tipo de error: el texto completo puede incluir la URL
+        # con el token del bot, y eso quedaría en el log (journal).
+        log(f"  Telegram: no se pudo enviar ({type(e).__name__})")
         return False
     if r.status_code != 200:
         log(f"  Telegram: error {r.status_code}: {r.text[:200]}")
@@ -325,7 +338,9 @@ def enviar_mensaje_telegram(token, chat_id, texto, timeout=15):
         r = requests.post(url, data={"chat_id": chat_id, "text": texto},
                           timeout=timeout)
     except requests.RequestException as e:
-        log(f"  Telegram: no se pudo enviar ({e})")
+        # Solo el tipo de error: el texto completo puede incluir la URL
+        # con el token del bot, y eso quedaría en el log (journal).
+        log(f"  Telegram: no se pudo enviar ({type(e).__name__})")
         return False
     return r.status_code == 200
 
@@ -355,7 +370,7 @@ def tomar_foto_ffmpeg(url_rtsp, timeout=20):
         return None
     except FileNotFoundError:
         log("ERROR: falta ffmpeg. Instálalo con: sudo apt install -y ffmpeg")
-        sys.exit(2)
+        return None
     if not proceso.stdout:
         return None
     datos = np.frombuffer(proceso.stdout, dtype=np.uint8)
@@ -376,7 +391,12 @@ def frame_a_jpg(frame):
 # ---------- VIGILAR UNA CÁMARA (un hilo por cámara) ----------
 
 def vigilar_camara(camara, cfg, net):
-    """Bucle de una cámara: foto -> ¿movimiento? -> ¿persona/animal? -> aviso."""
+    """Bucle de una cámara: foto -> ¿movimiento? -> ¿persona/animal? -> aviso.
+
+    Una sola pausa al final del ciclo (detener.wait(intervalo)): así, si hay
+    movimiento sin detección o el aviso está en cooldown, no se toman fotos
+    por RTSP una tras otra (con viento, eso saturaría la CPU).
+    """
     nombre = camara["nombre"]
     clave = camara.get("clave", nombre)
     url = construir_url_rtsp(
@@ -404,34 +424,24 @@ def vigilar_camara(camara, cfg, net):
             continue
         fallos_seguidos = 0
 
-        if not hay_movimiento(frame_anterior, frame,
-                              fraccion_minima=umbral_mov):
-            frame_anterior = frame
-            detener.wait(intervalo)
-            continue
+        if hay_movimiento(frame_anterior, frame,
+                          fraccion_minima=umbral_mov):
+            filtradas = detectar(net, frame, confianza)
+            ahora = time.time()
+            if filtradas and ahora - ultimo_aviso.get(clave, 0) >= cooldown:
+                ultimo_aviso[clave] = ahora
+                etiquetas = [d["etiqueta"] for d in filtradas]
+                jpg = frame_a_jpg(frame)
+                if jpg is not None:
+                    ruta = guardar_foto(jpg, carpeta_buffer, clave, etiquetas)
+                    caption = construir_caption(nombre, filtradas)
+                    log(f"[{nombre}] {texto_detecciones(filtradas)} -> {os.path.basename(ruta)}")
+                    if enviar_foto_telegram(cfg["telegram"]["token"],
+                                            cfg["telegram"]["chat_id"], ruta, caption):
+                        log(f"[{nombre}] foto enviada por Telegram")
+                    else:
+                        log(f"[{nombre}] la foto quedó en {ruta} (no se pudo enviar)")
         frame_anterior = frame
-
-        filtradas = detectar(net, frame, confianza)
-        if not filtradas:
-            continue   # hubo movimiento pero no era persona ni animal (árboles, etc.)
-
-        ahora = time.time()
-        if ahora - ultimo_aviso.get(clave, 0) < cooldown:
-            continue   # mismo evento: ya se avisó hace poco
-        ultimo_aviso[clave] = ahora
-
-        etiquetas = [d["etiqueta"] for d in filtradas]
-        jpg = frame_a_jpg(frame)
-        if jpg is None:
-            continue
-        ruta = guardar_foto(jpg, carpeta_buffer, clave, etiquetas)
-        caption = construir_caption(nombre, filtradas)
-        log(f"[{nombre}] {texto_detecciones(filtradas)} -> {os.path.basename(ruta)}")
-        if enviar_foto_telegram(cfg["telegram"]["token"],
-                                cfg["telegram"]["chat_id"], ruta, caption):
-            log(f"[{nombre}] foto enviada por Telegram")
-        else:
-            log(f"[{nombre}] la foto quedó en {ruta} (no se pudo enviar)")
         detener.wait(intervalo)
 
 

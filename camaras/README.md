@@ -4,14 +4,23 @@ Vigila las 3 cámaras Tapo de casa (1x C310 por cable + 2x C217 por Wi-Fi) y,
 cuando la IA detecta **una persona o un animal (sobre todo gatos)**, manda
 la foto por Telegram. **No graba vídeo.**
 
-- Cada 5 minutos toma una foto de cada cámara por RTSP.
+- Cada 5 minutos toma una foto de cada cámara por RTSP (stream2, la
+  imagen secundaria, más ligera: el detector trabaja a 300x300, así que
+  sobra).
 - Primero compara con la foto anterior: si casi nada cambió, no hace nada.
   Esto filtra el movimiento de hojas y ramas sin gastar CPU.
 - Si hubo movimiento, pasa la foto por MobileNet-SSD. Solo avisa por:
   persona, gato, perro, pájaro, caballo, oveja y vaca. Los árboles **no**
-  son una clase del modelo, así que nunca provocan un aviso.
+  son una clase del modelo, así que casi nunca provocan un aviso (ojo: las
+  hojas y sombras con viento se pueden confundir a veces con pájaro).
 - Guarda la foto en la carpeta `fotos/` con un máximo de **30 fotos**:
   al llegar a la 31, borra la más vieja. Nada se acumula en el disco.
+
+> Nota: con una revisión cada 5 minutos, una persona que entra y sale
+> entre dos fotos no aparece en ninguna. Es un compromiso para no cargar
+> el servidor; la app Tapo ya graba por su cuenta. Si quieres más
+> cobertura, baja `intervalo_segundos` a 120 en `config.json` y mide la
+> carga antes de decidir.
 
 Corre como servicio systemd en el servidor y arranca solo al prenderlo.
 
@@ -28,12 +37,11 @@ Corre como servicio systemd en el servidor y arranca solo al prenderlo.
 
 ```bash
 sudo apt update
-sudo apt install -y python3-opencv ffmpeg git
-pip install --break-system-packages requests
+sudo apt install -y python3-opencv ffmpeg python3-requests git
 ```
 
 `python3-opencv` trae OpenCV y NumPy; `ffmpeg` toma las fotos por RTSP;
-`requests` habla con Telegram.
+`python3-requests` habla con Telegram.
 
 ## 2. Descargar el modelo de IA (MobileNet-SSD)
 
@@ -101,9 +109,12 @@ En la app Tapo, por cada cámara:
 2. Crea un usuario y una contraseña **solo para la cámara**
    (no es tu cuenta TP-Link). Apúntalos: van en `config.json`.
 3. La dirección RTSP queda así:
-   `rtsp://usuario:contraseña@192.168.1.68:554/stream1`
-   (`stream1` es la imagen principal; `stream2` es la secundaria,
-   más ligera y suficiente para detectar).
+   `rtsp://usuario:contraseña@192.168.1.68:554/stream2`
+   (`stream2` es la imagen secundaria, más ligera y suficiente para
+   detectar, porque el modelo trabaja a 300x300; `stream1` es la imagen
+   principal, en 2K en la C310, y gasta mucho más CPU. Comprueba que
+   `stream2` abre en las tres cámaras; si alguna no lo abre, ponle
+   `stream1` solo a esa en `config.json`).
 
 Las cámaras ya tienen IP fija: **.68 la C310, .67 y .76 las C217**.
 
@@ -112,6 +123,7 @@ Las cámaras ya tienen IP fija: **.68 la C310, .67 y .76 las C217**.
 ```bash
 cd ~/camaras
 cp config.json.example config.json
+chmod 600 config.json
 nano config.json
 ```
 
@@ -129,9 +141,12 @@ Rellena:
 
 > 🔒 **Nunca subas `config.json` a GitHub ni lo pases por chat:**
 > ahí van el token del bot y las contraseñas de las cámaras. Si subes
-> este proyecto a GitHub, añade `config.json` al `.gitignore`.
+> este proyecto a GitHub, añade `config.json` al `.gitignore`. El
+> `chmod 600` deja el archivo solo legible por tu usuario.
 > También puedes poner el token con variables de entorno en el
-> servicio (ver `camara-telegram.service`).
+> servicio (ver `camara-telegram.service`): crea
+> `/etc/camara-telegram.env` con `TELEGRAM_BOT_TOKEN` y
+> `TELEGRAM_CHAT_ID` y dale `sudo chmod 600`.
 
 ## 6. Instalar el servicio
 
@@ -183,8 +198,9 @@ hay 30: al guardar la 31 se borra la más vieja automáticamente.
 | `falta ffmpeg` / `falta OpenCV` | Repite el paso 1. |
 | `falta el token de Telegram o el chat id` | Revisa `config.json` (paso 5) o las variables de entorno. |
 | `no pude tomar foto` una y otra vez | La cámara no responde por RTSP: revisa que la IP fija siga siendo la misma, que el usuario/contraseña RTSP sean los de la cuenta de cámara y que la cámara esté encendida. Prueba `stream2` si `stream1` no abre. |
-| Llegan fotos de árboles | No debería pasar (los árboles no son clase del modelo). Si pasa, sube `confianza_minima` a 0.6 en `config.json`. |
+| Llegan fotos de árboles | No debería pasar casi nunca (los árboles no son clase del modelo), pero las hojas y sombras con viento se pueden confundir a veces con pájaro. Si pasa, sube `confianza_minima` a 0.6 en `config.json`, o quita la clase pájaro si te llegan muchos falsos. |
 | El servidor se siente lento | Sube `intervalo_segundos` a 600 y `cooldown_segundos` a 120 en `config.json`. La detección solo corre cuando hay movimiento, así que el gasto normal es bajo. |
+| Avisos al amanecer o al anochecer | Normal: las cámaras pasan a visión nocturna (infrarrojo, blanco y negro) y eso genera movimiento falso una o dos veces al día. Solo añade carga puntual. |
 
 ## Ideas para después (no en v1)
 

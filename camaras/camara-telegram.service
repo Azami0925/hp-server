@@ -6,14 +6,25 @@ Wants=network-online.target
 [Service]
 User=roger1317
 WorkingDirectory=/home/roger1317/camaras
+# El token de Telegram y el chat id van en /etc/camara-telegram.env
+# (permisos 600, solo root lo lee). El guion inicial hace que el archivo
+# sea opcional: si no existe, el programa usa config.json.
+# Crear el archivo así:
+#   sudo nano /etc/camara-telegram.env
+#   TELEGRAM_BOT_TOKEN=123456789:AAExxxxxxxxx...
+#   TELEGRAM_CHAT_ID=123456789
+#   sudo chmod 600 /etc/camara-telegram.env
+EnvironmentFile=-/etc/camara-telegram.env
 ExecStart=/usr/bin/python3 /home/roger1317/camaras/camara-telegram.py
 Restart=always
 RestartSec=10
-# Si prefieres no poner el token en config.json, quita el # de las dos
-# líneas siguientes y pon tus datos (ojo: este archivo queda en el
-# servidor, no se sube a GitHub):
-# Environment=TELEGRAM_BOT_TOKEN=TU_TOKEN_DE_TELEGRAM
-# Environment=TELEGRAM_CHAT_ID=123456789
+# Prioridad baja de CPU y tope de memoria: el programa comparte el servidor
+# con Immich y el monitor. NoNewPrivileges es seguro aquí (el programa solo
+# corre ffmpeg y Python, sin ping ni binarios setuid); si el servicio no
+# arrancara, es lo primero que conviene revisar.
+Nice=10
+NoNewPrivileges=true
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target
