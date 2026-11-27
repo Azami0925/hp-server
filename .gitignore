@@ -4,3 +4,8 @@ data_v3/
 *.env
 # Caché de Python.
 __pycache__/
+# Cámaras: el config real (token de Telegram + contraseñas RTSP), las fotos
+# del buffer y los archivos del modelo (se descargan aparte, ver README).
+camaras/config.json
+camaras/fotos/
+camaras/modelo/

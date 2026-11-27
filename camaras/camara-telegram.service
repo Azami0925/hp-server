@@ -1,0 +1,19 @@
+[Unit]
+Description=Camara Telegram: deteccion de personas y animales en Tapo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=roger1317
+WorkingDirectory=/home/roger1317/camaras
+ExecStart=/usr/bin/python3 /home/roger1317/camaras/camara-telegram.py
+Restart=always
+RestartSec=10
+# Si prefieres no poner el token en config.json, quita el # de las dos
+# líneas siguientes y pon tus datos (ojo: este archivo queda en el
+# servidor, no se sube a GitHub):
+# Environment=TELEGRAM_BOT_TOKEN=TU_TOKEN_DE_TELEGRAM
+# Environment=TELEGRAM_CHAT_ID=123456789
+
+[Install]
+WantedBy=multi-user.target
